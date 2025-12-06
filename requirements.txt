@@ -1,0 +1,10 @@
+torch==2.1.0
+numpy==1.26.4
+scipy
+pandas
+h5py
+matplotlib
+seaborn
+scikit-learn
+tqdm
+wandb
