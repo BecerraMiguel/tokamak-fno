@@ -62,7 +62,7 @@ class TokamakDataset(Dataset):
         super().__init__()
         
         # Cargar datos del archivo HDF5
-        self.signals, self.labels, self.shot_numbers = self._load_h5(h5_path)
+        self.signals, self.labels = self._load_h5(h5_path)
         
         # Ajustar longitud temporal si se especifica
         if max_length is not None and self.signals.shape[2] > max_length:
@@ -89,26 +89,34 @@ class TokamakDataset(Dataset):
         self.signals = torch.FloatTensor(self.signals)
         self.labels = torch.LongTensor(self.labels)
     
-    def _load_h5(self, h5_path: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def _load_h5(self, h5_path: str) -> Tuple[np.ndarray, np.ndarray]:
         """
         Carga datos desde archivo HDF5.
         
-        El archivo HDF5 debe contener tres datasets:
-        - 'signals': Array de señales diagnósticas
+        El archivo HDF5 debe contener:
+        - 'signals' o 'data': Array de señales diagnósticas
         - 'labels': Array de etiquetas (0 o 1)
-        - 'shot_numbers': Array de identificadores de disparo
         
         Returns:
             signals: Array de señales [n_samples, n_channels, time_steps]
             labels: Array de etiquetas [n_samples]
-            shot_numbers: Array de números de disparo [n_samples]
         """
         with h5py.File(h5_path, 'r') as f:
-            signals = f['signals'][:]
+            # Manejar diferentes nombres para las señales
+            if 'signals' in f.keys():
+                signals = f['signals'][:]
+            elif 'data' in f.keys():
+                signals = f['data'][:]
+            else:
+                available_keys = list(f.keys())
+                raise KeyError(
+                    f"No se encontró 'signals' ni 'data' en el archivo HDF5. "
+                    f"Datasets disponibles: {available_keys}"
+                )
+            
             labels = f['labels'][:]
-            shot_numbers = f['shot_numbers'][:]
         
-        return signals, labels, shot_numbers
+        return signals, labels
     
     def _compute_statistics(self) -> Tuple[np.ndarray, np.ndarray]:
         """
@@ -237,10 +245,29 @@ def get_dataloaders(
     np.random.seed(seed)
     torch.manual_seed(seed)
     
-    # Cargar datos sin normalizar primero para hacer split
+    # =========================================
+    # Cargar datos del archivo HDF5
+    # =========================================
     with h5py.File(h5_path, 'r') as f:
+        # Manejar diferentes nombres para las señales
+        if 'signals' in f.keys():
+            all_signals = f['signals'][:]
+        elif 'data' in f.keys():
+            all_signals = f['data'][:]
+        else:
+            available_keys = list(f.keys())
+            raise KeyError(
+                f"No se encontró 'signals' ni 'data' en el archivo HDF5. "
+                f"Datasets disponibles: {available_keys}"
+            )
+        
         all_labels = f['labels'][:]
-        n_samples = len(all_labels)
+    
+    n_samples = len(all_labels)
+    
+    # Ajustar longitud temporal si se especifica
+    if max_length is not None and all_signals.shape[2] > max_length:
+        all_signals = all_signals[:, :, -max_length:]
     
     # Crear índices y mezclar
     indices = np.arange(n_samples)
@@ -266,18 +293,6 @@ def get_dataloaders(
         idx_normal[n_val_normal:],
         idx_disruptive[n_val_disruptive:]
     ])
-    
-    # =========================================
-    # Cargar datos completos
-    # =========================================
-    with h5py.File(h5_path, 'r') as f:
-        all_signals = f['signals'][:]
-        all_labels = f['labels'][:]
-        all_shots = f['shot_numbers'][:]
-    
-    # Ajustar longitud temporal si se especifica
-    if max_length is not None and all_signals.shape[2] > max_length:
-        all_signals = all_signals[:, :, -max_length:]
     
     # Separar datos según los índices
     train_signals = all_signals[train_indices]
