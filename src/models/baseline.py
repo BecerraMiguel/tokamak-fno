@@ -14,6 +14,7 @@ Arquitectura:
 
 Target: < 500k parámetros, accuracy > 55% (mejor que aleatorio)
 
+Autor: Miguel Becerra
 Proyecto: Tokamak FNO - Día 4
 """
 
