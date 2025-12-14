@@ -58,3 +58,7 @@ wandb/
 # Logs
 *.log
 logs/
+
+
+#CLAUDe
+CLAUDE.md
