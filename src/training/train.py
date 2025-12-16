@@ -34,7 +34,7 @@ def train_epoch(
     Una época = una pasada completa por todo el dataset de entrenamiento.
     
     Args:
-        model: El modelo a entrenar (BaselineCNN)
+        model: El modelo a entrenar (BaselineCNN o FNO1d)
         dataloader: DataLoader con datos de entrenamiento
         criterion: Función de pérdida (CrossEntropyLoss)
         optimizer: Optimizador (Adam)
@@ -222,25 +222,46 @@ def train_model(
     model: nn.Module,
     train_loader: DataLoader,
     val_loader: DataLoader,
+    criterion: Optional[nn.Module] = None,
+    optimizer: Optional[torch.optim.Optimizer] = None,
+    scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
+    num_epochs: Optional[int] = None,
     epochs: int = 30,
     learning_rate: float = 1e-3,
     device: Optional[torch.device] = None,
     save_dir: str = "results",
     patience: int = 7,
+    model_name: str = "model",
     verbose: bool = True
 ) -> Dict:
     """
     Loop completo de entrenamiento con validación y guardado de mejor modelo.
     
+    Soporta dos modos de uso:
+    
+    Modo 1 - Simple (crea criterion/optimizer internamente):
+        history = train_model(model, train_loader, val_loader, epochs=30)
+    
+    Modo 2 - Avanzado (pasa criterion/optimizer/scheduler externos):
+        history = train_model(model, train_loader, val_loader,
+                              criterion=criterion, optimizer=optimizer,
+                              scheduler=scheduler, num_epochs=30,
+                              model_name='fno')
+    
     Args:
         model: Modelo a entrenar
         train_loader: DataLoader de entrenamiento
         val_loader: DataLoader de validación
-        epochs: Número máximo de épocas
-        learning_rate: Tasa de aprendizaje para Adam
+        criterion: Función de pérdida (opcional, default: CrossEntropyLoss)
+        optimizer: Optimizador (opcional, default: Adam)
+        scheduler: Learning rate scheduler (opcional)
+        num_epochs: Número de épocas (alias para epochs)
+        epochs: Número máximo de épocas (default: 30)
+        learning_rate: Tasa de aprendizaje para Adam (si no se pasa optimizer)
         device: Dispositivo de cómputo (auto-detecta si None)
         save_dir: Directorio para guardar modelo y métricas
         patience: Épocas para early stopping
+        model_name: Nombre base para guardar el modelo (default: 'model')
         verbose: Si True, imprime progreso
     
     Returns:
@@ -252,23 +273,32 @@ def train_model(
             - best_val_acc: Mejor accuracy de validación
             - best_epoch: Época del mejor modelo
     """
+    # Resolver num_epochs vs epochs (num_epochs tiene prioridad)
+    total_epochs = num_epochs if num_epochs is not None else epochs
+    
     # Auto-detectar dispositivo
     if device is None:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
     if verbose:
         print(f"Entrenando en: {device}")
-        print(f"Épocas máximas: {epochs}")
-        print(f"Learning rate: {learning_rate}")
+        print(f"Épocas máximas: {total_epochs}")
         print(f"Early stopping patience: {patience}")
+        print(f"Modelo se guardará como: best_{model_name}.pt")
         print("-" * 50)
     
     # Mover modelo al dispositivo
     model = model.to(device)
     
-    # Configurar loss y optimizer
-    criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    # Configurar loss si no se proporciona
+    if criterion is None:
+        criterion = nn.CrossEntropyLoss()
+    
+    # Configurar optimizer si no se proporciona
+    if optimizer is None:
+        optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+        if verbose:
+            print(f"Learning rate: {learning_rate}")
     
     # Early stopping
     early_stopping = EarlyStopping(patience=patience)
@@ -291,7 +321,7 @@ def train_model(
     start_time = time.time()
     
     # Loop principal de entrenamiento
-    for epoch in range(epochs):
+    for epoch in range(total_epochs):
         epoch_start = time.time()
         
         # Entrenar una época
@@ -304,6 +334,13 @@ def train_model(
             model, val_loader, criterion, device
         )
         
+        # Actualizar scheduler si existe (ReduceLROnPlateau necesita val_loss)
+        if scheduler is not None:
+            if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                scheduler.step(val_loss)
+            else:
+                scheduler.step()
+        
         # Guardar métricas
         history['train_losses'].append(train_loss)
         history['val_losses'].append(val_loss)
@@ -315,20 +352,15 @@ def train_model(
             history['best_val_acc'] = val_acc
             history['best_epoch'] = epoch + 1
             
-            # Guardar mejor modelo
-            torch.save({
-                'epoch': epoch + 1,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'val_acc': val_acc,
-                'val_loss': val_loss,
-            }, save_path / 'best_model.pt')
+            # Guardar mejor modelo con nombre personalizado
+            model_filename = f'best_{model_name}.pt'
+            torch.save(model.state_dict(), save_path / model_filename)
         
         epoch_time = time.time() - epoch_start
         
         # Imprimir progreso
         if verbose:
-            print(f"Época {epoch+1:3d}/{epochs} | "
+            print(f"Época {epoch+1:3d}/{total_epochs} | "
                   f"Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.4f} | "
                   f"Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.4f} | "
                   f"Tiempo: {epoch_time:.1f}s")
@@ -347,6 +379,7 @@ def train_model(
         print(f"Entrenamiento completado en {total_time:.1f} segundos")
         print(f"Mejor accuracy de validación: {history['best_val_acc']:.4f} "
               f"(época {history['best_epoch']})")
+        print(f"Modelo guardado en: {save_path / f'best_{model_name}.pt'}")
     
     # Cargar mejor modelo al final
     early_stopping.load_best_model(model)

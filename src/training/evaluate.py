@@ -26,7 +26,7 @@ from sklearn.metrics import (
     precision_recall_curve,
     average_precision_score
 )
-from typing import Dict, Tuple, Optional
+from typing import Dict, Tuple, Optional, Union
 from pathlib import Path
 
 
@@ -91,7 +91,7 @@ def calculate_metrics(
     y_true: np.ndarray,
     y_pred: np.ndarray,
     y_proba: np.ndarray
-) -> Dict[str, float]:
+) -> Dict[str, Union[float, np.ndarray]]:
     """
     Calcula todas las métricas de clasificación relevantes.
     
@@ -105,7 +105,9 @@ def calculate_metrics(
         y_proba: Probabilidades de clase positiva
         
     Returns:
-        Diccionario con todas las métricas calculadas
+        Diccionario con todas las métricas calculadas, incluyendo:
+        - Métricas escalares: accuracy, tpr, fpr, precision, f1, auc
+        - Arrays para curvas: fpr_curve, tpr_curve, confusion_matrix
     """
     # Matriz de confusión
     # [[TN, FP], [FN, TP]] cuando labels=[0,1]
@@ -134,7 +136,7 @@ def calculate_metrics(
     # Accuracy = (TP + TN) / Total
     accuracy = (tp + tn) / (tp + tn + fp + fn)
     
-    # AUC-ROC
+    # AUC-ROC y curvas
     fpr_curve, tpr_curve, _ = roc_curve(y_true, y_proba)
     roc_auc = auc(fpr_curve, tpr_curve)
     
@@ -142,28 +144,37 @@ def calculate_metrics(
     avg_precision = average_precision_score(y_true, y_proba)
     
     return {
+        # Métricas principales
         'accuracy': accuracy,
         'tpr': tpr,           # Recall / Sensitivity
         'fpr': fpr,
         'tnr': tnr,           # Specificity  
         'precision': precision,
         'f1': f1,
-        'roc_auc': roc_auc,
+        'auc': roc_auc,       # Nombre corto para compatibilidad
+        'roc_auc': roc_auc,   # Nombre largo
         'avg_precision': avg_precision,
+        
+        # Valores de matriz de confusión
         'tp': int(tp),
         'tn': int(tn),
         'fp': int(fp),
         'fn': int(fn),
         'total_samples': len(y_true),
         'total_disruptive': int(tp + fn),
-        'total_normal': int(tn + fp)
+        'total_normal': int(tn + fp),
+        
+        # Arrays para curvas y visualizaciones
+        'confusion_matrix': cm.tolist(),  # Lista para JSON serialization
+        'fpr_curve': fpr_curve.tolist(),  # Lista para JSON serialization
+        'tpr_curve': tpr_curve.tolist(),  # Lista para JSON serialization
     }
 
 
 def plot_confusion_matrix(
-    y_true: np.ndarray,
-    y_pred: np.ndarray,
+    confusion_mat: Union[np.ndarray, list],
     save_path: Optional[str] = None,
+    title: str = 'Confusion Matrix',
     figsize: Tuple[int, int] = (8, 6)
 ) -> plt.Figure:
     """
@@ -176,15 +187,19 @@ def plot_confusion_matrix(
     - Cuadrante inferior derecho: TP (Disrupción detectada correctamente)
     
     Args:
-        y_true: Etiquetas reales
-        y_pred: Predicciones
+        confusion_mat: Matriz de confusión 2x2 (puede ser numpy array o lista)
         save_path: Ruta para guardar la figura (opcional)
+        title: Título del gráfico
         figsize: Tamaño de la figura
         
     Returns:
         Objeto Figure de matplotlib
     """
-    cm = confusion_matrix(y_true, y_pred)
+    # Convertir a numpy si es lista
+    if isinstance(confusion_mat, list):
+        cm = np.array(confusion_mat)
+    else:
+        cm = confusion_mat
     
     fig, ax = plt.subplots(figsize=figsize)
     
@@ -201,7 +216,7 @@ def plot_confusion_matrix(
         yticklabels=classes,
         ylabel='Etiqueta Real',
         xlabel='Predicción del Modelo',
-        title='Matriz de Confusión\nPredicción de Disrupciones en Tokamak'
+        title=title
     )
     
     # Rotar etiquetas del eje x
@@ -235,45 +250,43 @@ def plot_confusion_matrix(
 
 
 def plot_roc_curve(
-    y_true: np.ndarray,
-    y_proba: np.ndarray,
+    fpr_data: Union[np.ndarray, list],
+    tpr_data: Union[np.ndarray, list],
+    roc_auc: float,
     save_path: Optional[str] = None,
+    title: str = 'ROC Curve',
     figsize: Tuple[int, int] = (8, 6)
 ) -> plt.Figure:
     """
     Genera curva ROC (Receiver Operating Characteristic).
     
-    La curva ROC muestra el trade-off entre TPR y FPR a diferentes
-    umbrales de clasificación. El área bajo la curva (AUC) indica
-    la capacidad discriminativa del modelo:
-    - AUC = 1.0: Clasificador perfecto
-    - AUC = 0.5: Clasificador aleatorio
+    La curva ROC muestra el trade-off entre True Positive Rate y
+    False Positive Rate a diferentes umbrales de clasificación.
     
     Args:
-        y_true: Etiquetas reales
-        y_proba: Probabilidades de clase positiva
+        fpr_data: Array de False Positive Rates para la curva
+        tpr_data: Array de True Positive Rates para la curva
+        roc_auc: Área bajo la curva ROC
         save_path: Ruta para guardar (opcional)
+        title: Título del gráfico
         figsize: Tamaño de figura
         
     Returns:
         Objeto Figure de matplotlib
     """
-    fpr, tpr, thresholds = roc_curve(y_true, y_proba)
-    roc_auc = auc(fpr, tpr)
+    # Convertir a numpy si es lista
+    fpr_curve = np.array(fpr_data) if isinstance(fpr_data, list) else fpr_data
+    tpr_curve = np.array(tpr_data) if isinstance(tpr_data, list) else tpr_data
     
     fig, ax = plt.subplots(figsize=figsize)
     
     # Curva ROC
-    ax.plot(fpr, tpr, color='darkorange', lw=2,
-            label=f'Curva ROC (AUC = {roc_auc:.3f})')
+    ax.plot(fpr_curve, tpr_curve, color='darkorange', lw=2,
+            label=f'ROC curve (AUC = {roc_auc:.3f})')
     
     # Línea diagonal (clasificador aleatorio)
     ax.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--',
-            label='Aleatorio (AUC = 0.5)')
-    
-    # Punto de operación ideal (esquina superior izquierda)
-    ax.scatter([0], [1], s=100, c='green', marker='*', zorder=5,
-              label='Punto ideal (0, 1)')
+            label='Random classifier')
     
     # Marcar targets del proyecto
     ax.axhline(y=0.90, color='red', linestyle=':', alpha=0.7,
@@ -289,7 +302,7 @@ def plot_roc_curve(
     ax.set_ylim([0.0, 1.05])
     ax.set_xlabel('False Positive Rate (Tasa de Falsas Alarmas)')
     ax.set_ylabel('True Positive Rate (Tasa de Detección)')
-    ax.set_title('Curva ROC - Predicción de Disrupciones')
+    ax.set_title(title)
     ax.legend(loc='lower right')
     ax.grid(True, alpha=0.3)
     
@@ -398,14 +411,17 @@ def print_evaluation_report(metrics: Dict[str, float]) -> None:
     print(f"   Precision:        {metrics['precision']:.4f} ({metrics['precision']*100:.1f}%)")
     print(f"   F1 Score:         {metrics['f1']:.4f}")
     print(f"   Specificity:      {metrics['tnr']:.4f} ({metrics['tnr']*100:.1f}%)")
-    print(f"   ROC-AUC:          {metrics['roc_auc']:.4f}")
+    
+    # Usar 'auc' o 'roc_auc' dependiendo de cuál esté disponible
+    auc_value = metrics.get('auc', metrics.get('roc_auc', 0))
+    print(f"   ROC-AUC:          {auc_value:.4f}")
     print(f"   Avg Precision:    {metrics['avg_precision']:.4f}")
     
     # Interpretación
     print(f"\n💡 INTERPRETACIÓN")
     if metrics['tpr'] >= 0.90 and metrics['fpr'] <= 0.10:
         print("   ✅ El modelo cumple con los targets del proyecto.")
-        print("   ✅ Listo para siguiente fase (implementación FNO).")
+        print("   ✅ Listo para siguiente fase.")
     elif metrics['tpr'] >= 0.90:
         print("   ✅ Detección de disrupciones excelente.")
         print("   ⚠️ Tasa de falsas alarmas por encima del target.")
@@ -423,8 +439,9 @@ def evaluate_model(
     data_loader: torch.utils.data.DataLoader,
     device: torch.device,
     save_dir: Optional[str] = None,
-    plot: bool = True
-) -> Dict[str, float]:
+    plot: bool = True,
+    model_name: str = ""
+) -> Dict[str, Union[float, list]]:
     """
     Función principal de evaluación completa.
     
@@ -440,14 +457,17 @@ def evaluate_model(
         device: Dispositivo (cuda/cpu)
         save_dir: Directorio para guardar plots (opcional)
         plot: Si generar visualizaciones
+        model_name: Nombre del modelo para archivos de salida
         
     Returns:
-        Diccionario con todas las métricas
+        Diccionario con todas las métricas, incluyendo:
+        - Métricas escalares: accuracy, tpr, fpr, precision, f1, auc
+        - Arrays: confusion_matrix, fpr_curve, tpr_curve
         
     Example:
-        >>> model = BaselineCNN(in_channels=5, num_classes=2)
-        >>> model.load_state_dict(torch.load('results/best_model.pt'))
-        >>> metrics = evaluate_model(model, val_loader, device, 'results/')
+        >>> model = FNO1d(in_channels=5, out_channels=2)
+        >>> model.load_state_dict(torch.load('results/best_fno.pt'))
+        >>> metrics = evaluate_model(model, val_loader, device, 'results/', model_name='fno')
     """
     print("\n🔄 Ejecutando evaluación del modelo...")
     
@@ -461,18 +481,23 @@ def evaluate_model(
     if save_dir:
         Path(save_dir).mkdir(parents=True, exist_ok=True)
     
+    # Prefijo para archivos
+    prefix = f"{model_name}_" if model_name else ""
+    
     # Generar visualizaciones
     if plot:
         # Matriz de confusión
-        cm_path = f"{save_dir}/confusion_matrix.png" if save_dir else None
-        plot_confusion_matrix(y_true, y_pred, cm_path)
+        cm_path = f"{save_dir}/{prefix}confusion_matrix.png" if save_dir else None
+        plot_confusion_matrix(metrics['confusion_matrix'], cm_path, 
+                             title=f'{model_name.upper()} - Confusion Matrix' if model_name else 'Confusion Matrix')
         
         # Curva ROC
-        roc_path = f"{save_dir}/roc_curve.png" if save_dir else None
-        plot_roc_curve(y_true, y_proba, roc_path)
+        roc_path = f"{save_dir}/{prefix}roc_curve.png" if save_dir else None
+        plot_roc_curve(metrics['fpr_curve'], metrics['tpr_curve'], metrics['auc'], roc_path,
+                      title=f'{model_name.upper()} - ROC Curve' if model_name else 'ROC Curve')
         
         # Curva PR
-        pr_path = f"{save_dir}/precision_recall_curve.png" if save_dir else None
+        pr_path = f"{save_dir}/{prefix}precision_recall_curve.png" if save_dir else None
         plot_precision_recall_curve(y_true, y_proba, pr_path)
     
     # Imprimir reporte
@@ -509,6 +534,13 @@ if __name__ == "__main__":
     
     # Calcular métricas
     metrics = calculate_metrics(y_true, y_pred, y_proba)
+    
+    # Verificar que las curvas están incluidas
+    print("\nVerificando métricas retornadas:")
+    print(f"  ✓ confusion_matrix: {type(metrics['confusion_matrix'])}")
+    print(f"  ✓ fpr_curve: {type(metrics['fpr_curve'])} con {len(metrics['fpr_curve'])} puntos")
+    print(f"  ✓ tpr_curve: {type(metrics['tpr_curve'])} con {len(metrics['tpr_curve'])} puntos")
+    print(f"  ✓ auc: {metrics['auc']:.4f}")
     
     # Imprimir reporte
     print_evaluation_report(metrics)
